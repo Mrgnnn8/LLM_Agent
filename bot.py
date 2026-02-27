@@ -1,7 +1,9 @@
 import os
 import json
+import random
 from openai import OpenAI
 from abc import ABC, abstractmethod
+from country import country_choice
 
 
 class Brain(ABC):
@@ -10,11 +12,12 @@ class Brain(ABC):
         self.model = model
 
         self.role = role
-        self.history = []
-        self.max_history = 20
+        self.history = [] #There is room to optimise how this list looks. It is not efficient right now.
+        self.max_history = 10
         self.question_budget = question_budget
         self.questions_asked = 0
         self.attribute_space = attribute_space
+        self.country_choice = country_choice
 
     @abstractmethod
     def profile(self) -> str:
@@ -28,7 +31,7 @@ class Brain(ABC):
     def memory(self) -> str:
         # This function creates and stores the memory of the agent
         """
-        Retrieves and formats he conversation history for the injection into the prompt.
+        Retrieves and formats the conversation history for the injection into the prompt.
         Respects max_history to avoid overflowing context window.
         """
         recent = self.history[-self.max_history:]
@@ -60,42 +63,44 @@ class Brain(ABC):
         """
         pass
 
-    def prompt_constructor(self) -> str:
+    def act(self) -> str:
         """
         Orchestrates the four modules in sequence to build a prompt which is fed into the model.
         """
         context = self.profile()
         history = self.memory()
-        plan = self.plan(context, history)
+        plan = self.planning(context, history)
         output = self.action(plan)
         return output
     
-    def call_llm(self, input: str, user: str) -> str:
+    def call_llm(self, input: str) -> str:
         response = self.api_client.responses.create(
             model=self.model,
             instructions=self.profile(),
             input=input
         )
-        return response.output_text.strip()
+        response = response.output_text.strip()
+        return response
 
     def update_history(self, question: str, answer: str): 
         self.history.append({"question": question, "answer": answer})
 
 
 class Seeker(Brain):
-    def __init__(self, model: str, question_budget: int, attribute_space: list):
+    def __init__(self, client: OpenAI, model: str, question_budget: int, attribute_space: list):
         super().__init__(
+            client=client,
             role="seeker",
-            model=model, 
+            model=model,
             question_budget=question_budget,
             attribute_space=attribute_space
-            )
+        )
 
     def profile(self) -> str:
         budget_remaining = self.question_budget - self.questions_asked
         attributes = (
             f"You may only ask questions about the following attributes: {', '.join(self.attribute_space)}"
-            if self.attribute_space else 
+            if self.attribute_space else
             "You may ask yes/no questions about the country."
         )
         return (
@@ -106,34 +111,70 @@ class Seeker(Brain):
         )
 
     def planning(self, context: str, history: str) -> str:
-        system = context
         user = (
             f"Game history so far:\n{history}\n\n"
             f"Before asking your next question, reason about your strategy. "
             f"Consider: What do you already know? What question would eliminate "
             f"the most candidate countries? Think step by step, then state your plan."
         )
-        return self.call_llm(system, user)
+        plan = self.call_llm(user)
+        return plan
 
     def action(self, plan: str) -> str:
-        system = (
-            "You are a question-asker in a country guessing game. "
-            "Based on your reasoning, output only the next yes/no question to ask. "
-            "DO not include any explanation - just the question itself. "
+        user = (
+            f"Your reasoning and plan:\n{plan}\n\n"
+            f"Now output your next yes/no question. Just the question, no explanation."
         )
-        user = f"Your reasoning and plan:|n{plan}|n|nNow output your question:"
-        question = self.call_llm(system, user)
+        question = self.call_llm(user)
         self.questions_asked += 1
         return question
 
     def make_guess(self) -> str:
-        system = "You are trying to identify a hidden country based on the answers you have recieved. "
         user = (
-            f"Game history:\n{self.memory}\n\n"  
+            f"Game history:\n{self.memory()}\n\n"
             f"Based on everything you know, what is your final guess for the country? "
             f"Respond with only the country name."
         )
-        return self.call_llm(system, user)
+        return self.call_llm(user)
 
 
+class Oracle(Brain):
+    def __init__(self, client: OpenAI, model: str, question_budget: int, country_choice: list, attribute_space: list):
+        super().__init__(
+            client=client,
+            role="oracle",
+            model=model,
+            question_budget=question_budget,
+            attribute_space=attribute_space
+        )
+        self.hidden_country = random.choice(country_choice)
+        self.current_question = None
+
+    def profile(self) -> str:
+        return (
+            f"You are a strategic Oracle in a country-guessing game. "
+            f"The hidden country is: {self.hidden_country}. "
+            f"Your goal is to answer the Seeker's questions without revealing the country. "
+            f"YOU CANNOT LIE. YES or NO answers only."
+        )
+
+    def receive_question(self, question: str):
+        self.current_question = question
+
+    def planning(self, context: str, history: str) -> str:
+        user = (
+            f"The seeker has asked: {self.current_question}\n"
+            f"Game history:\n{history}\n\n"
+            f"Keep answers depth to a minimum, we are talking yes or no mainly, and anything else where applicable {self.hidden_country}."
+        )
+        return self.call_llm(user)
+
+    def action(self, plan: str) -> str:
+        user = (
+            f"Your reasoning: {plan}\n\n"
+            f"Now give your final answer to the seeker's question: {self.current_question}\n"
+            f"Be truthful but vague. Never reveal the country name."
+        )
+        return self.call_llm(user)
+        
 
