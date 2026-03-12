@@ -10,7 +10,7 @@ client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
 seeker = Seeker(
     client=client,
     model="gpt-5-nano",
-    question_budget=15,
+    question_budget=5,
     attribute_space=ATTRIBUTE_SPACE,
 )
 
@@ -18,7 +18,7 @@ oracle = Oracle(
     client = client,
     model="gpt-5-nano",
     country_choice=country_choice,
-    question_budget=15,
+    question_budget=5,
     attribute_space=ATTRIBUTE_SPACE,
 )
 

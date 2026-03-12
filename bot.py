@@ -118,13 +118,15 @@ class Seeker(Brain):
         )
 
     def planning(self, context: str, history: str) -> str:
+        current_candidates = self.candidate_list()
+        
         user = (
             f"Game history so far:\n{history}\n\n "
             f"The current score is {self.game.score}. You want to reduce the amount of candidates remaining as much as possible to help minimise the score. "
             f"You have {self.question_budget - self.questions_asked} questions remaining.\n\n"
             f"Based on the current chat history, reason through the following steps:\n"
             f"1. What do you know so far about the country?\n"
-            f"2. Given what you know, list the countries that are still possible from this list: {self.country_choice}\n"
+            f"2. Given what you know, list the countries that are still possible from this list: {current_candidates}\n"
             f"3. How many candidates remain?\n"
             f"4. What is your strategy for your next question to eliminate the most candidates?\n\n"
             f"Format your response exactly like this:\n"
@@ -140,11 +142,11 @@ class Seeker(Brain):
         
         try:
             count_line = [line for line in plan.split("\n") if line.startswith("COUNT:")][0]
-            candidate_count = int(count_line.replace("COUNT:", "").strip())
+            self.candidate_count = int(count_line.replace("COUNT:", "").strip())
         except (IndexError, ValueError):
             self.candidate_count = len(self.country_choice)
 
-        if candidate_count <= 2:
+        if self.candidate_count <= 2:
             return None
 
         user = (
@@ -163,6 +165,15 @@ class Seeker(Brain):
             f"Respond with only the country name. "
         )
         return self.call_llm(user)
+
+    def candidate_list(self) -> list:
+        if not os.path.exists("candidate_log.txt") or os.path.getsize("candidate_log.txt") == 0:
+            return self.country_choice
+
+        with open("candidate_log.txt", "r") as f:
+            last_line = f.readlines()[-1].strip()
+        
+        return last_line.split(", ") if last_line else self.country_choice
 
 
 class Oracle(Brain):
@@ -195,11 +206,12 @@ class Oracle(Brain):
         self.current_question = question
 
     def planning(self, context: str, history: str) -> str:
+        candidate_count = self.game.seeker.candidate_count if hasattr(self, 'game') else "unknown"
         user = (
             f"Hidden country: {self.hidden_country}\n"
             f"Game history:\n{history}\n\n"
             f"The seeker has asked: {self.current_question}\n"
-            f"The seeker currently has {self.game.seeker.candidate_count} candidates remaining.\n\n"
+            f"The seeker currently has {candidate_count} candidates remaining.\n\n"
             f"Your task is to reason about how to answer this question strategically.\n"
             f"Consider the following:\n"
             f"1. What is the factually correct answer to this question about {self.hidden_country}?\n"
