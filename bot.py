@@ -98,6 +98,7 @@ class Seeker(Brain):
             attribute_space=attribute_space,
         )
         self.candidate_count = len(self.country_choice)
+        self.n_branches = 5 # controls number of thought branches
 
     def profile(self) -> str:
         budget_remaining = self.question_budget - self.questions_asked
@@ -117,36 +118,90 @@ class Seeker(Brain):
             f"Removing too many countries could lead to you removing countries that are the correct answer. "
         )
 
+    def tree_of_thought(self, current_candidates: list, history: str) -> str:
+        branches = []
+        current_candidates = self.candidate_list()
+
+        for i in range(1, self.n_branches + 1):
+            #print(f"Thinking branch {i}/{self.n_branches}")
+            user = (
+                f"You are on thought {i} of {self.n_branches}.\n"
+                f"previously asked questions, do not ask these again: {self.history}\n"
+                f"you can ask questions from {self.attribute_space}"
+                f"The number of candidate countries is: {self.candidate_count}.\n"
+                f"The remaining candidate countries are {current_candidates}"
+                f"Estimate how many candidates would remain for both a yes and no answer.\n"
+                f"IMPORTANT: IF_YES_COUNT + IF_NO_COUNT must equal exactly {len(current_candidates)}.\n\n"
+                f"QUESTION: <your question>\n"
+                f"IF_YES_COUNT: <number>\n"
+                f"IF_NO_COUNT: <number>\n"
+            )
+            response = self.call_llm(user)
+
+            try:
+                question = [l for l in response.split("\n") if l.startswith("QUESTION:")][0].replace("QUESTION:", "").strip()
+                yes = int([l for l in response.split("\n") if l.startswith("IF_YES_COUNT:")][0].replace("IF_YES_COUNT:", "").strip())
+                no = int([l for l in response.split("\n") if l.startswith("IF_NO_COUNT:")][0].replace("IF_NO_COUNT:", "").strip())
+            except (IndexError, ValueError):
+                question = "unknown"
+                yes = no = len(current_candidates)
+
+            branches.append({
+                "branch_number": i,
+                "score": self.game.score,
+                "question": question,
+                "if_yes_count": yes,
+                "if_no_count": no,
+            })
+        
+        #print(branches)
+        self.log_branches(branches)
+        self.branches = branches
+        return branches
+
+    def log_branches(self, branches: list):
+        current_candidates = self.candidate_list()
+        with open("tree_of_thoughts.txt", "a") as f:
+            f.write(f"\nQuestion number: {self.questions_asked + 1} / {self.question_budget} |Branches evaluated: {len(branches)} | Candidates: {len(current_candidates)}\n")
+            for b in branches:
+                f.write(f"Branch {b['branch_number']}: {b['question']} | IF_YES_COUNT: {b['if_yes_count']} | IF_NO_COUNT: {b['if_no_count']}\n")
+
     def planning(self, context: str, history: str) -> str:
         current_candidates = self.candidate_list()
-        
+        branches = self.tree_of_thought(current_candidates, history)
+        branches_summary = "\n".join([
+            f"Option {b['branch_number']}: {b['question']} | If the answer is yes: {b['if_yes_count']} | If the reply is no: {b['if_no_count']}"
+            for b in branches
+        ])
+
         user = (
             f"Game history so far:\n{history}\n\n "
             f"The current score is {self.game.score}. You want to reduce the amount of candidates remaining as much as possible to help minimise the score. "
+            f"You have already gone through and decided 5 questions you may ask, you must choose one of these questions: {branches_summary}"
             f"You have {self.question_budget - self.questions_asked} questions remaining.\n\n"
             f"Based on the current chat history, reason through the following steps:\n"
             f"1. What do you know so far about the country?\n"
             f"2. Given what you know, list the countries that are still possible from this list: {current_candidates}\n"
             f"3. How many candidates remain?\n"
-            f"4. What is your strategy for your next question to eliminate the most candidates?\n\n"
+            f"4. What is your strategy for your next question to eliminate the most candidates using the questions and outcomes in {branches_summary}?\n\n"
             f"Format your response exactly like this:\n"
             f"REASONING: <your reasoning>\n"
-            f"CANDIDATES: <comma seperated list of remaining countries>\n"
-            f"COUNT: <number of candidates>\n"
-            f"STRATEGY: <your next question strategy>\n"
+            f"CANDIDATES: <comma seperated list of countries which you believe the hidden country may be.>\n"
+            f"STRATEGY: <your next question strategy which must stem from {branches}>\n"
         )
         plan = self.call_llm(user)
+        #print(plan)
         return plan
 
     def action(self, plan: str) -> str:
         
         try:
-            count_line = [line for line in plan.split("\n") if line.startswith("COUNT:")][0]
-            self.candidate_count = int(count_line.replace("COUNT:", "").strip())
+            count_line = [line for line in plan.split("\n") if line.startswith("CANDIDATES:")][0]
+            self.candidate_count = count_line.replace("CANDIDATES:", "").strip()
         except (IndexError, ValueError):
             self.candidate_count = len(self.country_choice)
 
-        if self.candidate_count <= 2:
+        if len(self.candidate_count) <= 2:
             return None
 
         user = (
@@ -173,7 +228,33 @@ class Seeker(Brain):
         with open("candidate_log.txt", "r") as f:
             last_line = f.readlines()[-1].strip()
         
-        return last_line.split(", ") if last_line else self.country_choice
+        current_candidates = last_line.split(", ") if last_line else self.country_choice
+        return current_candidates
+
+    
+    def update_candidate_file(self, question: str, answer: str):
+        current_candidates = self.candidate_list()
+    
+        user = (
+            f"Question asked: {self.game.question}\n"
+            f"Oracle answered: {self.game.answer}\n\n"
+            f"From this list:\n{', '.join(current_candidates)}\n\n"
+            f"Remove any country that is inconsistent with the answer.\n"
+            f"Label all remaining valid countries with CANDIDATE.\n"
+            f"CANDIDATE: <country>\n"
+        )
+        response = self.call_llm(user)
+    
+        candidates = [
+            line.replace("CANDIDATE:", "").strip()
+            for line in response.split("\n")
+            if line.startswith("CANDIDATE:")
+        ]
+        if not candidates:
+            candidates = current_candidates
+    
+        with open("candidate_log.txt", "w") as f:
+            f.write(", ".join(candidates))
 
 
 class Oracle(Brain):
@@ -239,6 +320,6 @@ class Oracle(Brain):
             f"- Be as uninformative as truthfully possible.\n"
             f"- Do not offer help or address the seeker as a human.\n"
         )
-        return self.call_llm(user)
-        
+        answer = self.call_llm(user)
+        return answer
 

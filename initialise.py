@@ -7,18 +7,22 @@ from attributes import ATTRIBUTE_SPACE
 
 client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
 
+#Parameters
+model = "gpt-5-nano"
+questions = 8
+
 seeker = Seeker(
     client=client,
-    model="gpt-5-nano",
-    question_budget=5,
+    model=model,
+    question_budget=questions,
     attribute_space=ATTRIBUTE_SPACE,
 )
 
 oracle = Oracle(
     client = client,
-    model="gpt-5-nano",
+    model=model,
     country_choice=country_choice,
-    question_budget=5,
+    question_budget=questions,
     attribute_space=ATTRIBUTE_SPACE,
 )
 

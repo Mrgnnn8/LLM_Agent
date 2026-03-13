@@ -11,6 +11,7 @@ class GameEnvironment:
         self.guess = None
         self.correct = None
         self.question = None
+        self.answer = None
 
     def run(self):
         turn = 1
@@ -33,10 +34,13 @@ class GameEnvironment:
 
             print(f"Seeker: {self.question}")
             answer = self.oracle.action(self.question)
+            self.answer = answer
             print(f"Oracle: {answer}")
 
             self.seeker.update_history(self.question, answer)
             self.oracle.update_history(self.question, answer)
+
+            self.seeker.update_candidate_file(self.question, answer)
             #self.score -= 10
             turn += 1
 
@@ -81,4 +85,4 @@ class GameEnvironment:
         code_count = self.seeker.candidate_count
         
         with open("candidate_log.txt", "a") as f:
-            f.write(f"Turn {turn} | Running Score: {code_count} | The last question: {self.question} | Candidates: {candidates}\n")
+            f.write(f"log_candidate | Turn {turn} | Running Score: {code_count} | The last question: {self.question} | Candidates: {candidates}\n")
